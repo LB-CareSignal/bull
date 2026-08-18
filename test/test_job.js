@@ -186,6 +186,16 @@ describe('Job', function(){
         });
       });
     });
+
+    it('removes the job when removeOnComplete is true', function(){
+      return Job.create(queue, 301, {foo: 'bar'}, {removeOnComplete: true}).then(function(job){
+        return job.moveToCompleted('succeeded').then(function(){
+          return Job.fromId(queue, job.jobId).then(function(storedJob){
+            expect(storedJob).to.be(null);
+          });
+        });
+      });
+    });
   });
 
   describe('.moveToFailed', function () {
