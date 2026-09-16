@@ -391,6 +391,9 @@ Queue(queueName: string, redisPort: number, redisHost: string, redisOpts?: Redis
 ```ts
 Queue(queueName: string, redisConnectionString: string, redisOpts? RedisOpts): Queue
 ```
+```ts
+Queue(queueName: string, opts?: QueueOpts): Queue
+```
 
 This is the Queue constructor. It creates a new Queue that is persisted in
 Redis. Everytime the same queue is instantiated it tries to process all the
@@ -414,6 +417,33 @@ __Arguments__
     redisConnectionString {String} A connection string containing the redis server host, port and (optional) authentication.
     redisOptions {Object} Options to pass to the redis client. https://github.com/luin/ioredis/blob/master/API.md#new-redisport-host-options
 ```
+
+Finally, the queue can be created from a single options object, which is the
+only form that accepts queue wide options:
+
+```typescript
+interface QueueOpts{
+  redis: RedisOpts; // Redis connection options, see above.
+
+  defaultJobOptions: JobOpts; // Job options applied to every job added to this
+                              // queue. Options passed to `add` take precedence
+                              // over these. [optional]
+}
+```
+
+This is useful to keep completed jobs from piling up in Redis without having to
+repeat the option on every `add` call:
+
+```js
+  var queue = Queue('cleanup', {
+    redis: { port: 6379, host: '127.0.0.1' },
+    defaultJobOptions: { removeOnComplete: true }
+  });
+```
+
+Note that the defaults are merged in when the job is added, so they are stored
+on the job itself and jobs added before the defaults changed keep their original
+options.
 
 ---------------------------------------
 
@@ -504,8 +534,10 @@ interface JobOpts{
                           // jobId is unique. If you attempt to add a job with an id that
                           // already exists, it will not be added.
 
-  removeOnComplete: boolean; // If true, removes the job when it successfully
-                            // completes. Default behavior is to keep the job in the completed set.
+  removeOnComplete: boolean | number; // If true, removes the job when it successfully
+                            // completes. If a number, keeps that many completed jobs around and
+                            // removes the oldest ones beyond it (0 is equivalent to true).
+                            // Default behavior is to keep the job in the completed set.
 
   removeOnFail: boolean; // If true, removes the job when it fails after all attempts.
                          // Default behavior is to keep the job in the failed set.
