@@ -2,6 +2,12 @@ v.2.2.7
 =======
 
 - Added queue-level options so that jobs can be deleted once completed.
+- job##finished() now also listens for the global completed and failed events,
+  so it settles for jobs run in another process and for jobs removed on
+  completion or failure, which it used to wait on forever.
+- Fixed the failed event being emitted before the job had actually been moved
+  to failed or removed, and the lock being released while that was still in
+  flight.
 
 v.2.2.6
 =======

@@ -445,6 +445,15 @@ Note that the defaults are merged in when the job is added, so they are stored
 on the job itself and jobs added before the defaults changed keep their original
 options.
 
+Be aware of what removing a job costs you. A removed job is gone from redis
+entirely: it never appears in the completed set, `getJobCounts().completed` does
+not count it, and any UI that lists completed jobs will show nothing for it. The
+`completed` and `global:completed` events still carry the full job, including
+its data and return value, so that is the place to hook up logging or metrics if
+you need a record of what ran. Because of this it is often better to set
+`removeOnComplete` per `add` call, on the high volume job types that are
+actually filling up redis, than to turn it on queue wide.
+
 ---------------------------------------
 
 
@@ -534,10 +543,8 @@ interface JobOpts{
                           // jobId is unique. If you attempt to add a job with an id that
                           // already exists, it will not be added.
 
-  removeOnComplete: boolean | number; // If true, removes the job when it successfully
-                            // completes. If a number, keeps that many completed jobs around and
-                            // removes the oldest ones beyond it (0 is equivalent to true).
-                            // Default behavior is to keep the job in the completed set.
+  removeOnComplete: boolean; // If true, removes the job when it successfully
+                            // completes. Default behavior is to keep the job in the completed set.
 
   removeOnFail: boolean; // If true, removes the job when it fails after all attempts.
                          // Default behavior is to keep the job in the failed set.

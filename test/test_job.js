@@ -504,6 +504,89 @@ describe('Job', function(){
       });
     });
 
+    //
+    // The queue instance that runs a job is the only one that emits the local
+    // 'completed' and 'failed' events, so a producer living somewhere else has
+    // to go by the global events instead. The second queue below stands in for
+    // that separate process.
+    //
+    describe('when the job runs on another queue instance', function(){
+      var worker;
+
+      beforeEach(function(){
+        worker = new Queue(queue.name, 6379, '127.0.0.1');
+        return new Promise(function(resolve){
+          worker.on('ready', resolve);
+        });
+      });
+
+      afterEach(function(){
+        return worker.close();
+      });
+
+      it('should resolve when the job has been completed', function(){
+        worker.process(function(){
+          return Promise.resolve();
+        });
+
+        return queue.add({ foo: 'bar' }).then(function(job){
+          return job.finished();
+        });
+      });
+
+      it('should reject when the job has failed', function(){
+        worker.process(function(){
+          return Promise.reject(Error('test error'));
+        });
+
+        return queue.add({ foo: 'bar' }).then(function(job){
+          return job.finished();
+        }).then(function(){
+          throw Error('should have been rejected');
+        }, function(err){
+          expect(err.message).to.equal('test error');
+        });
+      });
+
+      //
+      // Without the global events these two would hang until the test times
+      // out: the job hash is deleted as the job finishes, so the watchdog can
+      // never find it in the completed or failed set.
+      //
+      it('should resolve for a job added with removeOnComplete', function(){
+        worker.process(function(){
+          return Promise.resolve();
+        });
+
+        return queue.add({ foo: 'bar' }, { removeOnComplete: true }).then(function(job){
+          return job.finished();
+        });
+      });
+
+      it('should reject for a job added with removeOnFail', function(){
+        worker.process(function(){
+          return Promise.reject(Error('test error'));
+        });
+
+        var job;
+
+        return queue.add({ foo: 'bar' }, { removeOnFail: true }).then(function(added){
+          job = added;
+          return job.finished();
+        }).then(function(){
+          throw Error('should have been rejected');
+        }, function(err){
+          //
+          // The reason is read back from the job hash, which removeOnFail has
+          // deleted before the event is emitted, hence the generic message
+          // rather than the 'test error' thrown by the handler.
+          //
+          expect(err).to.be.an(Error);
+          expect(err.message).to.equal('Job ' + job.jobId + ' failed');
+        });
+      });
+    });
+
     it.skip('should resolve using the watchdog if pubsub was lost');
     it.skip('should reject using the watchdog if pubsub was lost');
 
