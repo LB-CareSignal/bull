@@ -1,3 +1,14 @@
+v.2.2.8
+=======
+
+- Remove numeric option from delete-on-complete option, only support true/false
+- job##finished() now also listens for the global completed and failed events,
+  so it settles for jobs run in another process and for jobs removed on
+  completion or failure, which it used to wait on forever.
+- Fixed the failed event being emitted before the job had actually been moved
+  to failed or removed, and the lock being released while that was still in
+  flight.
+
 v.2.2.7
 =======
 
