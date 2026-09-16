@@ -42,10 +42,42 @@ function cleanupQueues() {
   });
 }
 
+//
+// Resolves once predicate() returns something truthy, polling until it does.
+//
+// Several tests need the queue to have reached a particular internal state
+// before they act on it. Waiting for that state directly is reliable, whereas
+// assuming it has been reached by the time the previous promise settles is a
+// race that only shows up on a loaded machine.
+//
+function waitUntil(predicate, message, timeoutMs){
+  var deadline = Date.now() + (timeoutMs || 2000);
+
+  return new Promise(function(resolve, reject){
+    (function poll(){
+      var result;
+      try{
+        result = predicate();
+      }catch(err){
+        return reject(err);
+      }
+
+      if(result){
+        return resolve(result);
+      }
+      if(Date.now() >= deadline){
+        return reject(new Error('Timed out waiting until ' + (message || 'condition')));
+      }
+      setTimeout(poll, 5);
+    })();
+  });
+}
+
 module.exports = {
   simulateDisconnect: simulateDisconnect,
   buildQueue: buildQueue,
   cleanupQueue: cleanupQueue,
   newQueue: newQueue,
-  cleanupQueues: cleanupQueues
+  cleanupQueues: cleanupQueues,
+  waitUntil: waitUntil
 };

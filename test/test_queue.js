@@ -382,6 +382,72 @@ describe('Queue', function () {
       });
     });
 
+    it('should only keep the latest jobs if removeOnComplete is a number', function (done) {
+      var total = 8;
+      var keep = 3;
+      var added = [];
+      var completed = 0;
+
+      queue.process(function (job, jobDone) {
+        jobDone();
+      }).catch(done);
+
+      queue.on('completed', function () {
+        completed++;
+        if(completed < total){
+          return;
+        }
+        queue.getJobCounts().then(function (counts) {
+          expect(counts.completed).to.be.equal(keep);
+          return queue.getCompleted();
+        }).then(function (jobs) {
+          //
+          // The jobs are added one at a time, so the ones that are kept must be
+          // the last ones added.
+          //
+          var kept = _.map(jobs, 'jobId').sort();
+          expect(kept).to.eql(added.slice(-keep).sort());
+
+          //
+          // The job hashes of the trimmed jobs must be gone too, otherwise they
+          // would keep taking up space in redis.
+          //
+          return Promise.all(_.map(added.slice(0, -keep), function (jobId) {
+            return queue.getJob(jobId).then(function (job) {
+              expect(job).to.be.equal(null);
+            });
+          }));
+        }).then(function () {
+          done();
+        }, done);
+      });
+
+      // Added sequentially so that the job ids reflect the completion order.
+      Promise.each(_.range(total), function (i) {
+        return queue.add({ foo: i }, { removeOnComplete: keep }).then(function (job) {
+          added.push(job.jobId);
+        });
+      }).catch(done);
+    });
+
+    it('should remove job after completed if removeOnComplete is 0', function (done) {
+      queue.process(function (job, jobDone) {
+        jobDone();
+      }).catch(done);
+
+      queue.add({ foo: 'bar' }, { removeOnComplete: 0 }).catch(done);
+
+      queue.on('completed', function (job) {
+        queue.getJob(job.jobId).then(function (job) {
+          expect(job).to.be.equal(null);
+          return queue.getJobCounts();
+        }).then(function (counts) {
+          expect(counts.completed).to.be.equal(0);
+          done();
+        }, done);
+      });
+    });
+
     it('should remove job after failed if removeOnFail', function (done) {
       queue.process(function (job) {
         expect(job.data.foo).to.be.equal('bar');
@@ -994,6 +1060,161 @@ describe('Queue', function () {
     });
   });
 
+  describe('event publishing failures', function () {
+    var queue;
+
+    beforeEach(function () {
+      var client = new redis();
+      return client.flushdb().then(function () {
+        return utils.newQueue('publish failures ' + uuid());
+      }).then(function (_queue) {
+        queue = _queue;
+      });
+    });
+
+    afterEach(function () {
+      return utils.cleanupQueues();
+    });
+
+    //
+    // Publishing the global event is best effort, but the promise it returns is
+    // dropped by most callers. Letting it reject terminates the process from
+    // node 15 onwards, which is a bad way for a queue to react to a redis blip.
+    //
+    function failPublish() {
+      queue.client.publish = function (channel, message, cb) {
+        cb(new Error('simulated publish failure'));
+      };
+    }
+
+    it('does not reject the add when the event publish fails', function () {
+      failPublish();
+      return queue.add({ foo: 'bar' }).then(function (job) {
+        expect(job.jobId).to.be.ok();
+      });
+    });
+
+    //
+    // The local event has already been emitted by the time the global publish
+    // fails, so a dropped publish is deliberately not escalated to 'error'.
+    //
+    it('does not raise an error event when the event publish fails', function () {
+      var errors = [];
+      queue.on('error', function (err) {
+        errors.push(err);
+      });
+
+      failPublish();
+      return queue.add({ foo: 'bar' }).delay(200).then(function () {
+        expect(errors).to.eql([]);
+      });
+    });
+
+    it('does not leave an unhandled rejection when nothing listens for errors', function () {
+      var rejections = [];
+      function record(err) {
+        // Only our own failure, so that teardown noise from other queues
+        // cannot make this test flap.
+        if(err && err.message === 'simulated publish failure'){
+          rejections.push(err);
+        }
+      }
+
+      failPublish();
+      process.on('unhandledRejection', record);
+
+      return queue.add({ foo: 'bar' }).delay(200).then(function () {
+        process.removeListener('unhandledRejection', record);
+        expect(rejections).to.eql([]);
+      }, function (err) {
+        process.removeListener('unhandledRejection', record);
+        throw err;
+      });
+    });
+  });
+
+  describe('defaultJobOptions', function () {
+    var queue;
+
+    beforeEach(function () {
+      var client = new redis();
+      return client.flushdb();
+    });
+
+    afterEach(function () {
+      // These queues are built directly rather than through utils, so that the
+      // queue wide options can be passed in, which means closing them here too.
+      var closing = queue ? queue.close() : Promise.resolve();
+      queue = null;
+      return closing;
+    });
+
+    function buildQueueWithDefaults(defaultJobOptions) {
+      queue = new Queue('default job options ' + uuid(), {
+        redis: { port: 6379, host: '127.0.0.1' },
+        defaultJobOptions: defaultJobOptions
+      });
+      return queue.isReady();
+    }
+
+    it('applies the queue defaults to jobs added without options', function (done) {
+      buildQueueWithDefaults({ removeOnComplete: true }).then(function () {
+        queue.process(function (job, jobDone) {
+          jobDone();
+        }).catch(done);
+
+        queue.add({ foo: 'bar' }).catch(done);
+
+        queue.on('completed', function (job) {
+          queue.getJob(job.jobId).then(function (job) {
+            expect(job).to.be.equal(null);
+            return queue.getJobCounts();
+          }).then(function (counts) {
+            expect(counts.completed).to.be.equal(0);
+            done();
+          }, done);
+        });
+      }, done);
+    });
+
+    it('lets the job options override the queue defaults', function (done) {
+      buildQueueWithDefaults({ removeOnComplete: true }).then(function () {
+        queue.process(function (job, jobDone) {
+          jobDone();
+        }).catch(done);
+
+        queue.add({ foo: 'bar' }, { removeOnComplete: false }).catch(done);
+
+        queue.on('completed', function (job) {
+          queue.getJob(job.jobId).then(function (job) {
+            expect(job).to.be.ok();
+            return queue.getJobCounts();
+          }).then(function (counts) {
+            expect(counts.completed).to.be.equal(1);
+            done();
+          }, done);
+        });
+      }, done);
+    });
+
+    it('keeps the completed jobs when no defaults are given', function (done) {
+      buildQueueWithDefaults(undefined).then(function () {
+        queue.process(function (job, jobDone) {
+          jobDone();
+        }).catch(done);
+
+        queue.add({ foo: 'bar' }).catch(done);
+
+        queue.on('completed', function () {
+          queue.getJobCounts().then(function (counts) {
+            expect(counts.completed).to.be.equal(1);
+            done();
+          }, done);
+        });
+      }, done);
+    });
+  });
+
   describe('.pause', function () {
     beforeEach(function () {
       var client = new redis();
@@ -1187,6 +1408,17 @@ describe('Queue', function () {
 
       return new Promise(function(resolve) {
         queue.on('ready', resolve);
+      }).then(function() {
+        //
+        // The point of this test is that pausing has to wait for a blocking
+        // retrieval that is already in flight. Being ready is not enough: the
+        // worker issues its first brpoplpush a few ticks later, and if pause
+        // gets in first then moveJob returns straight away, no job is picked
+        // up, and the counts below are off by one.
+        //
+        return utils.waitUntil(function() {
+          return queue.retrieving > 0;
+        }, 'the queue is blocked retrieving a job');
       }).then(function() {
         //start the pause process
         var queueIsPaused = queue.pause(true);

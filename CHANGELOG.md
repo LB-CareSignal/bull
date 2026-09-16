@@ -1,3 +1,8 @@
+v.2.2.7
+=======
+
+- Added queue-level options so that jobs can be deleted once completed.
+
 v.2.2.6
 =======
 
